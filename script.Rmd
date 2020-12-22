@@ -22,8 +22,6 @@ library(tidyverse)
 theme_set(theme_light())
 ```
 
-I would like to reproduce results from Dupuis and Schwarz (2007) who proposed a multistate Jolly-Seber model in a Bayesian framework. First I will fit a standard Jolly-Seber model in `unmarked`, then do the same in `Jags`, finally try and extend the approach to several sites/states. 
-
 # Frequentist approach
 
 Read in data.
