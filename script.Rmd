@@ -1,0 +1,90 @@
+---
+title: "Jolly-Seber model"
+author: "Olivier Gimenez"
+date: "22/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I would like to reproduce results from Dupuis and Schwarz (2007) who proposed a multistate Jolly-Seber model in a Bayesian framework. First I will fit a standard Jolly-Seber model in `unmarked`, then do the same in `Jags`, finally try and extend the approach to several sites/states. 
+
+## Some theory
+
+A bit of theory, from Kéry and Schaub's book. 
+
+We denote the number of individuals ever alive during the study $N_s$, the superpopulation size **sensu** (Schwarz and Arnason, 1996). We further assume that a fraction of $N_s$ is already alive and in the study area at the first capture occasion, and that all remaining individuals have entered the population by the end of the study. The probability that a member of $N_s$ enters the population at occasion $t$ is $b_t, t = 1, \ldots, T$ and is called the entry probability (Schwarz and Arnason, 1996). It is the probability that an individual is new in the population, i.e. that it has entered the population since the preceding occasion. Entry could result either from in situ recruitment (locally-born individuals) or from immigration. 
+
+Sometimes the entry probability is called recruitment probability, but this is inaccurate. The number of individuals entering the population at $t$ is $B_t = N_s b_t$. The fraction of individuals already present at the first occasion is $b_1$; this ‘entry’ probability has no clear ecological meaning, because it is a complex function of all entries before the first occasion. All entry probabilities must sum to 1 to ensure that all $N_s$ individuals enter the population sometime during the study. The number of individuals entering at each occasion can be modeled with a multinomial distribution as $\mathbf{B} \sim \text{multinomial}(N_s, \mathbf{b})$.
+
+We denote the latent state of individual $i$ at occasion $t$ as $z_{i,t} = 1$, if it
+is alive and present in the population, and as $z_{i,t} = 0$, if it is either dead or has not yet entered
+the population. Thus, if individual $i$ enters the population at $t$, its latent state changes from $z_{i,t-1} = 0$ to $z_{i,t} = 1$. On entry, the survival process starts, which is a simple coin flip. Technically, the latent state $z_{i,t+1}$ at $t + 1$ is determined by a Bernoulli trial with success probability $\phi_{i,t}, t = 1, \ldots, T-1$. The two processes defined so far, the entry and the survival process, represent the latent state processes. The
+observation process is defined for individuals that are alive ($z = 1$). As usual, we assume that the detection of individual $i$ at occasion $t$ is determined by another coin flip with success probability $p_{i,t}, t = 1, \ldots, T$, i.e., by another Bernoulli trial.
+
+The resulting capture-recapture data consist of the capture histories of $n$ individuals. When capture probability is imperfect, typically not all individuals in a population are captured; hence, $n < N_s$. If $N_s$ was known, the capture-recapture data would contain in addition $N_s - n$ all-zero capture-histories, and the model specification would be relatively simple. We could just use a multinomial distribution to estimate entry probabilities. However, $N_s$ is unknown and so the multinomial index is also unknown and must be estimated. Moreover, parameters such as entry and capture probabilities refer to the complete population ($N_s$), not just to the $n$ individuals ever captured. To deal with these challenges, we use parameter-expanded data augmentation. The key idea is to fix the dimension of the parameter space in the analysis by augmenting the observed data with a large number of all-zero capture histories, resulting in a larger data set of fixed dimension $M$, and to analyze the augmented dataset using a reparameterized (zero-inflated) version of the model that would be applied if $N_s$ were known. 
+
+After augmentation, the capture-recapture data set contains $M$ individuals, of which $N_s$ are genuine and $M-N_s$ are pseudo-individuals. We don’t know the proportions of genuine and pseudo-individuals, but we can estimate them. There are different ways to parameterize a JS model and we present three here. First, the entry to the population is described as a removal process from $M$ so that at the end of the study, $N_s, N_s \leq M$ individuals have entered. This model can be developed either as a restricted version of a dynamic occupancy model or as a multistate model. As a third approach we use a zero-inflated version of the superpopulation formulation.
+
+## Frequentist approach
+
+Read in data.
+```{r}
+library(RMark)
+popan <- convert.inp("dat/capsid.inp")
+head(popan)
+```
+
+Process data and make design matrix. 
+```{r}
+popan.processed <- process.data(popan, model = "POPAN")
+popan.ddl <- make.design.data(popan.processed)
+```
+
+Define parameters, survival and recruitment.
+```{r}
+Phi.dot <- list(formula=~1)
+p.dot <- list(formula=~1)
+pent.dot <- list(formula=~1)
+Phi.t <- list(formula=~time)
+p.t <- list(formula=~time)
+pent.t <- list(formula=~time)
+```
+
+Run models.
+```{r}
+Phi.dot_p.dot_pent.dot <- mark(popan.processed,
+                               popan.ddl,
+                               model.parameters = list(Phi = Phi.dot, p = p.dot, pent = pent.dot))
+Phi.t_p.t_pent.t <- mark(popan.processed,
+                         popan.ddl,
+                         model.parameters = list(Phi = Phi.t, p = p.t, pent = pent.t))
+mod.list <- create.model.list("POPAN")
+popan.results <- collect.models()
+```
+
+Inspect results.
+```{r}
+popan.results
+```
+
+Display estimates. Surviva, detection and recruitment first.
+```{r}
+results <- popan.results$Phi.t_p.t_pent.t$results$real
+results
+```
+
+Population size then.
+```{r}
+derived <- popan.derived(popan.processed, Phi.t_p.t_pent.t)$N
+derived
+```
+
+Clean up the mess.
+```{r}
+rm(list=ls())
+cleanup(ask=F)
+```
+
