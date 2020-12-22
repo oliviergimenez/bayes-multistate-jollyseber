@@ -2,39 +2,42 @@
 title: "Jolly-Seber model"
 author: "Olivier Gimenez"
 date: "22/12/2020"
-output: html_document
+output:
+  pdf_document: default
+  html_document:
+    number_sections: yes
+header-includes:
+- \usepackage{blkarray}
+- \usepackage{amsmath}
+#- \usepackage{lineno}
+#- \linenumbers
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      cache = TRUE)
+library(tidyverse)
+theme_set(theme_light())
 ```
 
 I would like to reproduce results from Dupuis and Schwarz (2007) who proposed a multistate Jolly-Seber model in a Bayesian framework. First I will fit a standard Jolly-Seber model in `unmarked`, then do the same in `Jags`, finally try and extend the approach to several sites/states. 
 
-## Some theory
-
-A bit of theory, from Kéry and Schaub's book. 
-
-We denote the number of individuals ever alive during the study $N_s$, the superpopulation size **sensu** (Schwarz and Arnason, 1996). We further assume that a fraction of $N_s$ is already alive and in the study area at the first capture occasion, and that all remaining individuals have entered the population by the end of the study. The probability that a member of $N_s$ enters the population at occasion $t$ is $b_t, t = 1, \ldots, T$ and is called the entry probability (Schwarz and Arnason, 1996). It is the probability that an individual is new in the population, i.e. that it has entered the population since the preceding occasion. Entry could result either from in situ recruitment (locally-born individuals) or from immigration. 
-
-Sometimes the entry probability is called recruitment probability, but this is inaccurate. The number of individuals entering the population at $t$ is $B_t = N_s b_t$. The fraction of individuals already present at the first occasion is $b_1$; this ‘entry’ probability has no clear ecological meaning, because it is a complex function of all entries before the first occasion. All entry probabilities must sum to 1 to ensure that all $N_s$ individuals enter the population sometime during the study. The number of individuals entering at each occasion can be modeled with a multinomial distribution as $\mathbf{B} \sim \text{multinomial}(N_s, \mathbf{b})$.
-
-We denote the latent state of individual $i$ at occasion $t$ as $z_{i,t} = 1$, if it
-is alive and present in the population, and as $z_{i,t} = 0$, if it is either dead or has not yet entered
-the population. Thus, if individual $i$ enters the population at $t$, its latent state changes from $z_{i,t-1} = 0$ to $z_{i,t} = 1$. On entry, the survival process starts, which is a simple coin flip. Technically, the latent state $z_{i,t+1}$ at $t + 1$ is determined by a Bernoulli trial with success probability $\phi_{i,t}, t = 1, \ldots, T-1$. The two processes defined so far, the entry and the survival process, represent the latent state processes. The
-observation process is defined for individuals that are alive ($z = 1$). As usual, we assume that the detection of individual $i$ at occasion $t$ is determined by another coin flip with success probability $p_{i,t}, t = 1, \ldots, T$, i.e., by another Bernoulli trial.
-
-The resulting capture-recapture data consist of the capture histories of $n$ individuals. When capture probability is imperfect, typically not all individuals in a population are captured; hence, $n < N_s$. If $N_s$ was known, the capture-recapture data would contain in addition $N_s - n$ all-zero capture-histories, and the model specification would be relatively simple. We could just use a multinomial distribution to estimate entry probabilities. However, $N_s$ is unknown and so the multinomial index is also unknown and must be estimated. Moreover, parameters such as entry and capture probabilities refer to the complete population ($N_s$), not just to the $n$ individuals ever captured. To deal with these challenges, we use parameter-expanded data augmentation. The key idea is to fix the dimension of the parameter space in the analysis by augmenting the observed data with a large number of all-zero capture histories, resulting in a larger data set of fixed dimension $M$, and to analyze the augmented dataset using a reparameterized (zero-inflated) version of the model that would be applied if $N_s$ were known. 
-
-After augmentation, the capture-recapture data set contains $M$ individuals, of which $N_s$ are genuine and $M-N_s$ are pseudo-individuals. We don’t know the proportions of genuine and pseudo-individuals, but we can estimate them. There are different ways to parameterize a JS model and we present three here. First, the entry to the population is described as a removal process from $M$ so that at the end of the study, $N_s, N_s \leq M$ individuals have entered. This model can be developed either as a restricted version of a dynamic occupancy model or as a multistate model. As a third approach we use a zero-inflated version of the superpopulation formulation.
-
-## Frequentist approach
+# Frequentist approach
 
 Read in data.
 ```{r}
 library(RMark)
 popan <- convert.inp("dat/capsid.inp")
 head(popan)
+```
+
+For simplicity, I remove individuals that were lost on capture.
+```{r}
+mask <- which(popan$freq!=-1)
+popan <- data.frame(ch = popan$ch[mask], freq = popan$freq[mask])
+popan
 ```
 
 Process data and make design matrix. 
@@ -45,22 +48,24 @@ popan.ddl <- make.design.data(popan.processed)
 
 Define parameters, survival and recruitment.
 ```{r}
-Phi.dot <- list(formula=~1)
+phi.dot <- list(formula=~1)
 p.dot <- list(formula=~1)
-pent.dot <- list(formula=~1)
-Phi.t <- list(formula=~time)
-p.t <- list(formula=~time)
 pent.t <- list(formula=~time)
+pent.dot <- list(formula=~1)
 ```
 
 Run models.
 ```{r}
-Phi.dot_p.dot_pent.dot <- mark(popan.processed,
-                               popan.ddl,
-                               model.parameters = list(Phi = Phi.dot, p = p.dot, pent = pent.dot))
-Phi.t_p.t_pent.t <- mark(popan.processed,
-                         popan.ddl,
-                         model.parameters = list(Phi = Phi.t, p = p.t, pent = pent.t))
+phipentp <- mark(popan.processed,
+                  popan.ddl,
+                  model.parameters = list(Phi = phi.dot, 
+                                         p = p.dot, 
+                                         pent = pent.dot))
+phipenttp <- mark(popan.processed,
+                  popan.ddl,
+                  model.parameters = list(Phi = phi.dot, 
+                                            p = p.dot, 
+                                            pent = pent.t))
 mod.list <- create.model.list("POPAN")
 popan.results <- collect.models()
 ```
@@ -72,19 +77,542 @@ popan.results
 
 Display estimates. Surviva, detection and recruitment first.
 ```{r}
-results <- popan.results$Phi.t_p.t_pent.t$results$real
+results <- popan.results$phipenttp$results$real
 results
 ```
 
 Population size then.
 ```{r}
-derived <- popan.derived(popan.processed, Phi.t_p.t_pent.t)$N
+derived <- popan.derived(popan.processed, phipenttp)$N
 derived
 ```
 
+
+# Some theory
+
+A bit of theory, from Kéry and Schaub's book, chapter 10. See also book by Royle and Dorazio, chapter 10.  
+
+## Terminology and main quantities involved
+
+We denote the number of individuals ever alive during the study $N_s$, the superpopulation size **sensu** (Schwarz and Arnason, 1996). We further assume that a fraction of $N_s$ is already alive and in the study area at the first capture occasion, and that all remaining individuals have entered the population by the end of the study. The probability that a member of $N_s$ enters the population at occasion $t$ is $b_t, t = 1, \ldots, T$ and is called the entry probability (Schwarz and Arnason, 1996). It is the probability that an individual is new in the population, i.e. that it has entered the population since the preceding occasion. Entry could result either from in situ recruitment (locally-born individuals) or from immigration. 
+
+Sometimes the entry probability is called recruitment probability, but this is inaccurate. The number of individuals entering the population at $t$ is $B_t = N_s b_t$. The fraction of individuals already present at the first occasion is $b_1$; this ‘entry’ probability has no clear ecological meaning, because it is a complex function of all entries before the first occasion. All entry probabilities must sum to 1 to ensure that all $N_s$ individuals enter the population sometime during the study. The number of individuals entering at each occasion can be modeled with a multinomial distribution as $\mathbf{B} \sim \text{multinomial}(N_s, \mathbf{b})$.
+
+We denote the latent state of individual $i$ at occasion $t$ as $z_{i,t} = 1$, if it
+is alive and present in the population, and as $z_{i,t} = 0$, if it is either dead or has not yet entered
+the population. Thus, if individual $i$ enters the population at $t$, its latent state changes from $z_{i,t-1} = 0$ to $z_{i,t} = 1$. On entry, the survival process starts, which is a simple coin flip. Technically, the latent state $z_{i,t+1}$ at $t + 1$ is determined by a Bernoulli trial with success probability $\phi_{i,t}, t = 1, \ldots, T-1$. The two processes defined so far, the entry and the survival process, represent the latent state processes. The
+observation process is defined for individuals that are alive ($z = 1$). As usual, we assume that the detection of individual $i$ at occasion $t$ is determined by another coin flip with success probability $p_{i,t}, t = 1, \ldots, T$, i.e., by another Bernoulli trial.
+
+## Data augmentation
+
+The resulting capture-recapture data consist of the capture histories of $n$ individuals. When capture probability is imperfect, typically not all individuals in a population are captured; hence, $n < N_s$. If $N_s$ was known, the capture-recapture data would contain in addition $N_s - n$ all-zero capture-histories, and the model specification would be relatively simple. We could just use a multinomial distribution to estimate entry probabilities. However, $N_s$ is unknown and so the multinomial index is also unknown and must be estimated. Moreover, parameters such as entry and capture probabilities refer to the complete population ($N_s$), not just to the $n$ individuals ever captured. To deal with these challenges, we use parameter-expanded data augmentation. The key idea is to fix the dimension of the parameter space in the analysis by augmenting the observed data with a large number of all-zero capture histories, resulting in a larger data set of fixed dimension $M$, and to analyze the augmented dataset using a reparameterized (zero-inflated) version of the model that would be applied if $N_s$ were known. 
+
+After augmentation, the capture-recapture data set contains $M$ individuals, of which $N_s$ are genuine and $M-N_s$ are pseudo-individuals. We don’t know the proportions of genuine and pseudo-individuals, but we can estimate them. There are different ways to parameterize a JS model and we present three here. First, the entry to the population is described as a removal process from $M$ so that at the end of the study, $N_s, N_s \leq M$ individuals have entered. This model can be developed either as a restricted version of a dynamic occupancy model or as a multistate model. As a third approach we use a zero-inflated version of the superpopulation formulation.
+
+## The JS model as a restricted dynamic occupancy model
+
+We imagine that individuals can be in one of three possible states: ‘not yet entered’, ‘alive’ and ‘dead’. The state transition are governed by two ecological processes, entry and survival, which we estimate. We denote as $\gamma_t, t = 1, \ldots, T$ the probability that an available individual in $M$ enters the population at occasion $t$. This corresponds to the transition probability from state ‘not yet entered’ to the state ‘alive’. Importantly, $\gamma$ refers to available individuals, i.e., to those in $M$ that have not yet entered. The entry process is thus a removal process; over time fewer and fewer individuals will be in the state ‘not yet entered’ and thus be available to entering the population. As a result, $\gamma$ will increase over time on average, even with constant per-capita recruitment. It is a pure ‘nuisance parameter’, which is needed to describe the system, but without an ecological meaning. We refer to $\gamma$ as a removal entry probability. The expected number of individuals present at the first occasion is $E(B_1) = M \gamma_1$. The expected number of individuals entering at the second occasion is the product of the number of individuals still available to enter and $\gamma_2$, thus $E(B_2) = M(1-\gamma_1)\gamma_2$. More generally, the expected number of individuals entering the population at $t$ is $E(B_t) = M\prod_{i=1}^{t-1}(1-\gamma_i)\gamma_t$ and the total
+number of individuals that ever enter is $N_s = \sum \mathbf{B}$. 
+
+THe state of individual $i$ at first occasion is 
+
+$$z_{i,1} \sim \text{Bernoulli}(\gamma_1).$$
+
+Subsequent states are determined either by survival, for an individual already entered, or by entry for one that has not, with 
+
+$$z_{i,t+1} | z_{i,t}, \ldots, z_{i,1} \sim \text{Bernoulli}(z_{i,t} \;\phi_{i,t} + \gamma_{t+1}\prod_{k=1}^{t}(1-z_{i,k}))$$
+The observation process is governed by
+
+$$y_{i,t} | z_{i,t} \sim \text{Bernoulli}(z_{i,t} \; p_{i,t}).$$
+
+Derived quantities are population size at $t$ $N_t = \sum_{i=1}^M{z_{i,t}}$, the number of ‘fresh recruits’ (newly entered individuals) at $t$ $B_t = \sum_{i=1}^M{(1-z_{i,t-1})\;z_{i,t}}$, and superpopulation size is $N_s = \sum \mathbf{B}$.
+
+## The JS model as a multistate model
+
+The multistate formulation has the advantage that it can be extended in a creative way to include age classes, multiple sites, dead-recoveries or others. The state transition matrix is:
+
+
+\[
+\begin{blockarray}{cccc}
+& \text{not yet entered} & \text{alive} & \text{dead} \\
+\begin{block}{c(ccc)}
+  \text{not yet entered} & 1-\gamma & \gamma & 0 \\
+  \text{alive} & 0 & \phi & 1-\phi \\
+  \text{dead} & 0 & 0 & 1 \\
+\end{block}
+\end{blockarray}
+ \]
+
+The observation process is governed by matrix 
+
+\[
+\begin{blockarray}{ccc}
+& \text{seen} & \text{not seen}\\
+\begin{block}{c(cc)}
+  \text{not yet entered} & 0 & 1 \\
+  \text{alive} & p & 1-p \\
+  \text{dead} & 0 & 1 \\
+\end{block}
+\end{blockarray}
+ \]
+
+Since the traditional multistate models condition on initial capture, there is no way to estimate $\gamma_1$ at the first occasion. This can be overcome easily by adding a dummy occasion that contains only ‘0’ before the first real occasion in the data. In the model specification we then need to ensure that all individuals in the augmented data set are in
+state ‘not yet entered’ at this first dummy occasion with probability 1. In this way, we solve two problems. First, the proportion of individuals present already at the first real occasion is estimated by the first transition, and second, the analyzed capture-histories condition on the first dummy occasion, which means that the model becomes unconditional for all real occasions. Remember that the latent state variable $z$ now takes values 1 (‘not yet entered’), 2 (‘alive’) and 3 (‘dead’).
+
+## The superpopulation parameterization
+
+The POPAN parametrization by Crosbie and Manly (1985) and Schwarz and Arnason (1996) and implemented as a hierarchical model by Royle and Dorazio (2008) and Link and Barker (2010) is as follows. This parameterization uses entry probabilities $b$ and an inclusion parameter $\psi$. To keep the sequential specification of the state process model,
+we re-express the entry probabilities ($b$) as conditional entry probabilities ($\eta$), thus
+$$\eta_1 = b_1, \eta_2 = \frac{b_2}{1-b_1}, \ldots, \eta_t = \frac{b_t}{1-\displaystyle{\sum_{i=1}^{t-1}b_i}}.$$
+
+The conditional entry probabilities ($\eta$) are not the same as the removal entry probabilities ($\gamma$). Nevertheless, the state process is identical to that in the restricted occupancy parameterization, except that it contains $\eta$ instead of $\gamma$. For the observation process, we suppose that each individual of $M$ has an associated latent variable $w_i \sim \text{Bernoulli}(\psi)$. Individuals with $w_i = 1$ are exposed to sampling if alive, while individuals with $w_i = 0$ are not exposed to sampling. Thus, the observation model is
+
+$$y_{i,t}|z_{i,t} \sim \text{Bernoulli}(w_i \; z_{i,t} \; p_{i,t}).$$
+
+Here we can derive some population estimates of interest as well. The vector of latent
+state variables $z$ is inflated under the superpopulation formulation, because it has length $M$, rather than $N_s$. To deflate it, we calculate $u_{i,t} = z_{i,t} \; w_i$. By using $u$ instead of $z$, we can use the same formulas as for the restricted occupancy formulation to calculate the derived population estimates.
+
+## Remarks
+
+Under the restricted occupancy or the multistate JS model and assuming $T$ capture occasions and time-dependent parameters, we estimate $T\gamma$ parameters, $T-1$ survival and $T$ capture parameters. Under the superpopulation approach, we estimate the same number of survival and capture parameters, but only $T-1$ entry parameters are separately estimable (note that $b_T$ is 1 minus the sum of the other $b$) plus the inclusion parameter $\psi$. Thus, the total number of parameters is the same in all three formulations. This illustrates that the different formulations are reparameterizations of the same basic model.
+
+Naturally, all model formulations can be extended using the GLM framework. Care must be taken, however, with age-dependent models. The age of all individuals at initial capture must be known, and the entry time to the population must be somewhere between the birth of the individual and its initial capture. Capture probabilities depend on age, but the capture probability of the first age class and therefore also population size for this age class cannot be estimated. The multistate formulation of the JS model seems to be a framework with which age-dependent models can be fitted in the Bayesian paradigm, but the problem remains that population size of the first age class cannot be estimated. Care must also be taken when entry probabilities are modeled because they need to sum to 1 and therefore not all of them can independently be modeled.
+
+## Connections between parameters
+
+All three approaches to the JS model under data augmentation are related. The restricted occupancy and the multistate formulation are exactly equivalent in terms of parameterization and priors. In contrast, the superpopulation formulation has a different parameterization (in terms of $b$ and $\psi$ instead of $\gamma$) and consequently needs priors for other parameters. Here we summarize connections between different parameters in the three approaches and also their relation to further quantities of interest. The expected number of newly entered individuals per occasions is:
+
+$$E(B_1) = M \gamma_1 = N_s b_1$$
+$$E(B_2) = M (1-\gamma_1) \gamma_2 = N_s b_2$$
+$$\ldots$$
+$$E(B_t) = M \prod_{i=1}^{t-1}(1-\gamma_i) \gamma_t = N_s b_t$$
+Let's denote the probability that an ‘individual’ within the augmented data $M$ is a member of the true individuals $N_s$ with $ \psi = N_s/M$. After some algebra, we see that
+
+$$\gamma_1 = \psi b_1, \gamma_2 = \psi \frac{b_2}{1-b_1}, \ldots, \gamma_t = \psi \frac{b_t}{1-\displaystyle{\sum_{i=1}^{t-1}b_i}}$$
+Likewise, we can calculate $b$ from $\gamma$ as:
+$$b_1 = \frac{1}{\psi}\gamma_1, b_2 = \frac{1}{\psi}(1-\gamma_1)\gamma_2, \ldots$$
+Because all $b$ sum to 1, $b_T$ at the last occasion $T$ is:
+$$b_T = \frac{1}{\psi}\gamma_T \displaystyle{\prod_{i=1}^{T-1}(1-\gamma_i)}=1-\frac{1}{\psi}\left(\gamma_1+\sum_{i=1}^{T-1}(\gamma_{i-1}\prod_{}^{i}(1-\gamma_i))\right)$$
+Therefore, we can directly calculate $\psi$ from $\gamma$ as:
+$$\psi = 1 - \prod_{i=1}^{T}(1-\gamma_i)$$
+
+Pradel (1996) and Link and Barker (2005) used a further parameterization to model the recruitment process. Instead of an entry probability that either refers to the size of the augmented data set ($\gamma$, restricted occupancy parameterization and multistate model) or to the
+size of the superpopulation ($b$, superpopulation parameterization), they defined a per-capita entry probability ($f$). This quantity is computed as 
+
+$$f_t = \frac{B_t}{N_t}$$
+
+and expresses the fraction of new individuals at $t$ per individual alive at $t$. Expressing recruitment in this way results in the biologically most meaningful quantity. For the three models in this chapter, the per-capita entry probability can easily be estimated as a derived parameters, but to model this quantity directly, a different model parameterization is needed (Link and Barker, 2010).
+The population growth rate ($\lambda$) is easily computed as a derived quantity from the estimated population sizes or survival and per-capita entry probability:
+
+$$\lambda_t = \frac{N_{t+1}}{N_t} = \phi_t + f_t$$
+
+# Bayesian implementation
+
+## The three parameterizations
+
+```{r}
+phipenttp_occupancy <- function() {
+  # Priors and constraints
+  for (i in 1:M){
+    for (t in 1:(n.occasions-1)){
+      phi[i,t] <- mean.phi
+    } #t
+    for (t in 1:n.occasions){
+      p[i,t] <- mean.p
+    } #t
+  } #i
+  mean.phi ~ dunif(0, 1)
+  mean.p ~ dunif(0, 1)
+  for (t in 1:n.occasions){
+    gamma[t] ~ dunif(0, 1)
+  } #t
+  
+  # Likelihood
+  for (i in 1:M){
+    # First occasion
+    # State process
+    z[i,1] ~ dbern(gamma[1])
+    mu1[i] <- z[i,1] * p[i,1]
+    # Observation process
+    y[i,1] ~ dbern(mu1[i])
+    # Subsequent occasions
+    for (t in 2:n.occasions){
+      # State process
+      q[i,t-1] <- 1 - z[i,t-1] # Availability for recruitment
+      mu2[i,t] <- phi[i,t-1] * z[i,t-1] + gamma[t] * prod(q[i,1:(t-1)])
+      z[i,t] ~ dbern(mu2[i,t])
+      # Observation process
+      mu3[i,t] <- z[i,t] * p[i,t]
+      y[i,t] ~ dbern(mu3[i,t])
+    } #t
+  } #i
+  
+  # Calculate derived population parameters
+  for (t in 1:n.occasions){
+    qgamma[t] <- 1 - gamma[t]
+  }
+  cprob[1] <- gamma[1]
+  for (t in 2:n.occasions){
+    cprob[t] <- gamma[t] * prod(qgamma[1:(t-1)])
+  } #t
+  psi <- sum(cprob[]) # Inclusion probability
+  for (t in 1:n.occasions){
+    b[t] <- cprob[t] / psi # Entry probability
+  } #t
+  for (i in 1:M){
+    recruit[i,1] <- z[i,1]
+    for (t in 2:n.occasions){
+      recruit[i,t] <- (1 - z[i,t-1]) * z[i,t]
+    } #t
+  } #i
+  for (t in 1:n.occasions){
+    N[t] <- sum(z[1:M,t]) # Actual population size
+    B[t] <- sum(recruit[1:M,t]) # Number of entries
+  } #t
+  for (i in 1:M){
+    Nind[i] <- sum(z[i,1:n.occasions])
+    Nalive[i] <- 1-equals(Nind[i], 0)
+  } #i
+  Nsuper <- sum(Nalive[]) # Superpopulation size
+}
+```
+
+```{r}
+phipenttp_multistate <- function() {
+  #--------------------------------------
+  # Parameters:
+  # phi: survival probability
+  # gamma: removal entry probability
+  # p: capture probability
+  #--------------------------------------
+  # States (S):
+  # 1 not yet entered
+  # 2 alive
+  # 3 dead
+  # Observations (O):
+  # 1 seen
+  # 2 not seen
+  #--------------------------------------
+  
+  # Priors and constraints
+  for (t in 1:(n.occasions-1)){
+    gamma[t] ~ dunif(0, 1) # Prior for entry probabilities
+  }
+  phi ~ dunif(0, 1)
+  p ~ dunif(0, 1)
+  # Define state-transition and observation matrices
+    # Define probabilities of state S(t+1) given S(t)
+    for (t in 1:(n.occasions-1)){
+      ps[1,t,1] <- 1 - gamma[t]
+      ps[1,t,2] <- gamma[t]
+      ps[1,t,3] <- 0
+      ps[2,t,1] <- 0
+      ps[2,t,2] <- phi
+      ps[2,t,3] <- 1 - phi
+      ps[3,t,1] <- 0
+      ps[3,t,2] <- 0
+      ps[3,t,3] <- 1
+    } #t
+      # Define probabilities of O(t) given S(t)
+      po[1,1] <- 0
+      po[1,2] <- 1
+      po[2,1] <- p
+      po[2,2] <- 1 - p
+      po[3,1] <- 0
+      po[3,2] <- 1
+  # Likelihood
+  for (i in 1:M){
+    # Define latent state at first occasion
+    z[i,1] <- 1 # Make sure that all M individuals are in state 1 at t=1
+    for (t in 2:n.occasions){
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], t-1, 1:3])
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], 1:2])
+    } #t
+  } #i
+  # # Calculate derived population parameters
+  # for (t in 1:(n.occasions-1)){
+  #   qgamma[t] <- 1 - gamma[t]
+  # }
+  # cprob[1] <- gamma[1]
+  # for (t in 2:(n.occasions-1)){
+  #   cprob[t] <- gamma[t] * prod(qgamma[1:(t-1)])
+  # } #t
+  # psi <- sum(cprob[]) # Inclusion probability
+  # for (t in 1:(n.occasions-1)){
+  #   b[t] <- cprob[t] / psi # Entry probability
+  # } #t
+  # for (i in 1:M){
+  #   for (t in 2:n.occasions){
+  #     al[i,t-1] <- equals(z[i,t], 2)
+  #   } #t
+  #   for (t in 1:(n.occasions-1)){
+  #     d[i,t] <- equals(z[i,t] - al[i,t],0)
+  #   } #t
+  #   alive[i] <- sum(al[i,])
+  # } #i
+  # for (t in 1:(n.occasions-1)){
+  #   N[t] <- sum(al[,t]) # Actual population size
+  #   B[t] <- sum(d[,t]) # Number of entries
+  # } #t
+  # for (i in 1:M){
+  #   w[i] <- 1 - equals(alive[i],0)
+  # } #i
+  # Nsuper <- sum(w[]) # Superpopulation size
+}
+```
+
+```{r}
+phipenttp_popan <- function() {
+  # Priors and constraints
+  for (i in 1:M){
+    for (t in 1:(n.occasions-1)){
+      phi[i,t] <- mean.phi
+    } #t
+    for (t in 1:n.occasions){
+      p[i,t] <- mean.p
+    } #t
+  } #i
+  mean.phi ~ dunif(0, 1) # Prior for mean survival
+  mean.p ~ dunif(0, 1) # Prior for mean capture
+  psi ~ dunif(0, 1) # Prior for inclusion probability
+  # Dirichlet prior for entry probabilities
+  for (t in 1:n.occasions){
+    beta[t] ~ dgamma(1, 1)
+    b[t] <- beta[t] / sum(beta[1:n.occasions])
+  }
+  # Convert entry probs to conditional entry probs
+  nu[1] <- b[1]
+  for (t in 2:n.occasions){
+    nu[t] <- b[t] / (1 - sum(b[1:(t-1)]))
+  } #t
+  # Likelihood
+  for (i in 1:M){
+    # First occasion
+    # State process
+    w[i] ~ dbern(psi) # Draw latent inclusion
+    z[i,1] ~ dbern(nu[1])
+    # Observation process
+    mu1[i] <- z[i,1] * p[i,1] * w[i]
+    y[i,1] ~ dbern(mu1[i])
+    # Subsequent occasions
+    for (t in 2:n.occasions){
+      # State process
+      q[i,t-1] <- 1 - z[i,t-1]
+      mu2[i,t] <- phi[i,t-1] * z[i,t-1] + nu[t] * prod(q[i,1:(t-1)])
+      z[i,t] ~ dbern(mu2[i,t])
+      # Observation process
+      mu3[i,t] <- z[i,t] * p[i,t] * w[i]
+      y[i,t] ~ dbern(mu3[i,t])
+    } #t
+  } #i
+  # Calculate derived population parameters
+  for (i in 1:M){
+    for (t in 1:n.occasions){
+      u[i,t] <- z[i,t] * w[i] # Deflated latent state (u)
+    }
+  }
+  for (i in 1:M){
+    recruit[i,1] <- u[i,1]
+    for (t in 2:n.occasions){
+      recruit[i,t] <- (1 - u[i,t-1]) * u[i,t]
+    } #t
+  } #i
+  for (t in 1:n.occasions){
+    N[t] <- sum(u[1:M,t]) # Actual population size
+    B[t] <- sum(recruit[1:M,t]) # Number of entries
+  } #t
+  for (i in 1:M){
+    Nind[i] <- sum(u[i,1:n.occasions])
+    Nalive[i] <- 1 - equals(Nind[i], 0)
+  } #i
+  Nsuper <- sum(Nalive[]) # Superpopulation size
+}
+```
+
+## Application to capsid data
+
+We need to prepare the data. We ungroup the data.
+```{r}
+capsid_split <- splitCH(popan$ch)
+popan_id <- R2ucare::ungroup_data(capsid_split, popan$freq)
+```
+
+### Occupancy parameterization
+
+Augment the capture-histories by $nz$ pseudo-individuals.
+```{r}
+nz <- 500
+dim(popan_id)
+CH <- popan_id[,-14]
+CH.freq <- popan_id[,14]
+sum(CH.freq)
+CH.aug <- rbind(CH, matrix(0, ncol = dim(CH)[2], nrow = nz))
+```
+
+Then, we define initial values and parameters we want to monitor, set the MCMC specifications, run the model and print the results.
+
+The data.
+```{r}
+## Compute date of last capture
+#get.last <- function(x) max(which(x != 0))
+#last.obs <- apply(CH, 1, get.last)
+## if censored, then last capture becomes last occasion
+#last <- ifelse(CH.freq == -1, last.obs, ncol(CH))
+## add last occasion for augmented individuals
+#last <- c(last, rep(ncol(CH), nz))
+# list of data
+bugs.data <- list(y = CH.aug, 
+                  n.occasions = dim(CH.aug)[2], 
+                  M = dim(CH.aug)[1])
+```
+
+Initial values.
+```{r}
+zinit <- CH.aug
+zinit[zinit==0] <- 1
+inits <- function(){list(mean.phi = runif(1, 0, 1), 
+                         mean.p = runif(1, 0, 1), 
+                         z = zinit)}
+```
+
+Parameters monitored.
+```{r}
+parameters <- c("psi", "mean.p", "mean.phi", "b", "Nsuper", "N", "B", "gamma")
+# MCMC settings
+ni <- 5000
+nb <- 1000
+nc <- 2
+```
+
+Load package.
+```{r}
+library(R2jags)
+```
+
+Call Jags.
+```{r}
+capsid_occupancy <- jags(data  = bugs.data,
+                         inits = inits,
+                         parameters.to.save = parameters,
+                         model.file = phipenttp_occupancy, 
+                         n.chains = nc,
+                         n.iter = ni,
+                         n.burnin = nb)
+```
+
+Inspect results.
+```{r}
+capsid_occupancy
+```
+
+### Multistate parameterization
+
+We need to add a dummy occasion before the first real occasion, augment the data set and recode that data to match the codes of the observed states.
+
+Add dummy occasion
+```{r}
+CH.du <- cbind(rep(0, dim(CH)[1]), CH)
+```
+
+Augment data
+```{r}
+nz <- 500
+CH.ms <- rbind(CH.du, matrix(0, ncol = dim(CH.du)[2], nrow = nz))
+```
+
+Recode CH matrix (a 0 is not allowed)
+```{r}
+CH.ms[CH.ms==0] <- 2 # Not seen = 2, seen = 1
+```
+
+Then we run the analysis.
+```{r}
+# Bundle data
+bugs.data <- list(y = CH.ms, 
+                  n.occasions = dim(CH.ms)[2], 
+                  M = dim(CH.ms)[1])
+# Initial values
+zinit <- cbind(rep(NA, dim(CH.ms)[1]), CH.ms[,-1])
+zinit[zinit==1] <- 2
+inits <- function(){list(phi = runif(1, 0, 1), 
+                         p = runif(1, 0, 1), 
+                         z = zinit)}
+# Parameters monitored
+parameters <- c("p", "phi", "b", "Nsuper", "N", "B")
+parameters <- c("p", "phi")
+# MCMC settings
+ni <- 500
+nb <- 250
+nc <- 2
+capsid_multistate <- jags(data  = bugs.data,
+                          inits = inits,
+                          parameters.to.save = parameters,
+                          model.file = phipenttp_multistate,
+                          n.chains = nc,
+                          n.iter = ni,
+                          n.burnin = nb)
+capsid_multistate
+```
+
+### Analysis of the JS model under the superpopulation formulation
+
+This analysis requires the same preparation as the restricted occupancy formulation. We augment the observed capture-recapture data and run the analysis.
+
+Augment capture-histories by nz pseudo-individuals.
+```{r}
+nz <- 500
+CH.aug <- rbind(CH, matrix(0, ncol = dim(CH)[2], nrow = nz))
+```
+
+Bundle data.
+```{r}
+bugs.data <- list(y = CH.aug, 
+                  n.occasions = dim(CH.aug)[2], 
+                  M = dim(CH.aug)[1])
+```
+
+Initial values.
+```{r}
+zinit <- CH.aug
+zinit[zinit==0] <- 1
+inits <- function(){list(mean.phi = runif(1, 0, 1), 
+                         mean.p = runif(1, 0, 1), 
+                         psi = runif(1, 0, 1), 
+                         z = zinit)}
+```
+
+Parameters monitored.
+```{r}
+parameters <- c("psi", "mean.p", "mean.phi", "b", "Nsuper", "N", "B", "nu")
+```
+
+MCMC settings.
+```{r}
+ni <- 500
+nb <- 200
+nc <- 2
+```
+
+Call Jags.
+```{r}
+capsid_popan <- jags(data  = bugs.data,
+                     inits = inits,
+                     parameters.to.save = parameters,
+                     model.file = phipenttp_popan,
+                     n.chains = nc,
+                     n.iter = ni,
+                     n.burnin = nb)
+capsid_popan
+```
+
+
+# The end
+
 Clean up the mess.
 ```{r}
-rm(list=ls())
-cleanup(ask=F)
+rm(list = ls())
+cleanup(ask = F)
 ```
 
